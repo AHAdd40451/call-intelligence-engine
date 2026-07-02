@@ -1,88 +1,116 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
-import { askClaudeForJSON } from "@/lib/anthropic";
-import type { ApiResponse, Call, ContentIdea, ContentIdeaType } from "@/types";
+import Anthropic from "@anthropic-ai/sdk";
 
-export const dynamic = "force-dynamic";
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const CONTENT_SYSTEM_PROMPT = `You are a content strategist for a sales organization. You read recent
-sales call transcripts and summaries, then propose specific, ready-to-brief content ideas
-(social, email, podcast, webinar, FAQ, marketing copy) grounded in what real prospects said.
-Prefer concrete, quotable language over generic advice.`;
+export async function POST(req: NextRequest) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) {
+    return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+  }
 
-interface ClaudeContentIdea {
-  type: ContentIdeaType;
-  title: string;
-  description: string;
-  source_call_ids: string[];
-}
+  const supabase = createServiceRoleClient();
 
-function buildPrompt(calls: Pick<Call, "id" | "ai_summary" | "transcript">[]): string {
-  const transcriptBlocks = calls
-    .map(
-      (call) =>
-        `Call ${call.id}:\nSummary: ${call.ai_summary ?? "n/a"}\nTranscript excerpt: ${(
-          call.transcript ?? ""
-        ).slice(0, 800)}`
-    )
-    .join("\n\n---\n\n");
+  // Gather recent analysis data for context
+  const { data: analyses } = await supabase
+    .from("ai_analysis")
+    .select("pain_points, goals, objections, buying_intent")
+    .order("created_at", { ascending: false })
+    .limit(50);
 
-  return `Based on the following recent sales call transcripts, generate 4-8 content ideas.
-Return a JSON array where each item has exactly these keys: type (one of "instagram_reel",
-"email", "podcast", "webinar", "faq", "marketing_copy"), title (string), description (string,
-2-3 sentences explaining the angle and why it will resonate), source_call_ids (array of the
-call IDs referenced from the input, e.g. ["call_12"]).
+  const { data: calls } = await supabase
+    .from("calls")
+    .select("transcript, lead_name, setter, outcome")
+    .not("transcript", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(20);
 
-${transcriptBlocks}`;
-}
+  // Aggregate pain points and objections
+  const allPainPoints  = (analyses ?? []).flatMap(a => a.pain_points  ?? []);
+  const allObjections  = (analyses ?? []).flatMap(a => a.objections   ?? []);
+  const allGoals       = (analyses ?? []).flatMap(a => a.goals        ?? []);
 
-export async function POST() {
+  const topPains    = [...new Set(allPainPoints)].slice(0, 10).join(", ");
+  const topObjects  = [...new Set(allObjections)].slice(0, 8).join(", ");
+  const topGoals    = [...new Set(allGoals)].slice(0, 8).join(", ");
+
+  const sampleTranscripts = (calls ?? [])
+    .filter(c => c.transcript)
+    .slice(0, 5)
+    .map(c => `[${c.outcome}] ${c.transcript?.slice(0, 300)}…`)
+    .join("\n\n");
+
+  const prompt = `You are a content strategist for a trading education company targeting FIFO workers, people wanting a second income, and those seeking financial freedom.
+
+Based on these real insights from ${analyses?.length ?? 0} analysed sales calls:
+
+TOP PAIN POINTS: ${topPains || "FIFO lifestyle, wanting family time, second income, financial freedom"}
+TOP OBJECTIONS: ${topObjects || "Not enough time, partner concerns, money, fear, scam worries"}
+TOP GOALS: ${topGoals || "Replace income, learn trading, travel, retire early, spend time with kids"}
+
+SAMPLE CALL EXCERPTS:
+${sampleTranscripts || "FIFO worker wanting second income and more family time."}
+
+Generate 6 content ideas as a JSON array. Each idea must have this exact structure:
+[
+  {
+    "type": "instagram_reel" | "email" | "podcast" | "webinar" | "faq" | "marketing_copy",
+    "title": "<specific compelling title>",
+    "description": "<2-3 sentence description of what to create and why it will resonate>",
+    "source_insight": "<which pain point / objection / goal this targets>",
+    "estimated_reach": "high" | "medium" | "low"
+  }
+]
+
+Make titles specific and punchy. Use the exact language customers use. Include at least 1 of each: reel, email, podcast.
+Return ONLY valid JSON array, no markdown.`;
+
   try {
-    const supabase = createServiceRoleClient();
-
-    const { data: calls, error } = await supabase
-      .from("calls")
-      .select("id, ai_summary, transcript")
-      .not("transcript", "is", null)
-      .order("date", { ascending: false })
-      .limit(20)
-      .returns<Pick<Call, "id" | "ai_summary" | "transcript">[]>();
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    if (!calls || calls.length === 0) {
-      return NextResponse.json<ApiResponse<ContentIdea[]>>({ success: true, data: [] });
-    }
-
-    const ideas = await askClaudeForJSON<ClaudeContentIdea[]>({
-      system: CONTENT_SYSTEM_PROMPT,
-      prompt: buildPrompt(calls),
-      maxTokens: 2048,
+    const message = await client.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
     });
 
-    const now = new Date().toISOString();
-    const rows: ContentIdea[] = ideas.map((idea, index) => ({
-      id: `idea_${Date.now()}_${index}`,
-      type: idea.type,
-      title: idea.title,
-      description: idea.description,
-      source_call_ids: idea.source_call_ids,
-      created_at: now,
-      status: "new",
-    }));
-
-    const { error: insertError } = await supabase.from("content_ideas").insert(rows);
-    if (insertError) {
-      throw new Error(insertError.message);
+    const raw = message.content[0].type === "text" ? message.content[0].text : "[]";
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return NextResponse.json({ error: "Invalid response from Claude", raw }, { status: 500 });
     }
 
-    return NextResponse.json<ApiResponse<ContentIdea[]>>({ success: true, data: rows });
-  } catch (err) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
-      { status: 500 }
-    );
+    const ideas = JSON.parse(jsonMatch[0]);
+
+    // Save to DB
+    const toInsert = ideas.map((idea: Record<string, string>) => ({
+      type:            idea.type,
+      title:           idea.title,
+      description:     idea.description,
+      source_call_ids: [],
+      status:          "new",
+    }));
+
+    const { data: saved, error: saveErr } = await supabase
+      .from("content_ideas")
+      .insert(toInsert)
+      .select();
+
+    if (saveErr) console.error("Save content ideas error:", saveErr);
+
+    return NextResponse.json({ ok: true, count: ideas.length, ideas, saved });
+
+  } catch (e) {
+    console.error("Content engine error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
+}
+
+export async function GET() {
+  const supabase = createServiceRoleClient();
+  const { data } = await supabase
+    .from("content_ideas")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  return NextResponse.json({ ideas: data ?? [] });
 }
