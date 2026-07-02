@@ -1,102 +1,126 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
-import { askClaudeForJSON } from "@/lib/anthropic";
-import type { AIAnalysis, ApiResponse, Call } from "@/types";
+import Anthropic from "@anthropic-ai/sdk";
 
-export const dynamic = "force-dynamic";
-
-const ANALYSIS_SYSTEM_PROMPT = `You are an expert sales call analyst. You score outbound sales calls
-on an 0-100 scale across several dimensions, extract structured signals, and give
-concise, actionable coaching feedback. Be honest and specific — do not inflate scores.`;
-
-interface ClaudeAnalysisShape {
-  overall_score: number;
-  rapport: number;
-  qualification: number;
-  discovery: number;
-  objection_handling: number;
-  urgency: number;
-  closing: number;
-  script_compliance: number;
-  communication: number;
-  buying_intent: AIAnalysis["buying_intent"];
-  buying_intent_reason: string;
-  pain_points: string[];
-  goals: string[];
-  objections: string[];
-  sentiment: string[];
-  missed_opportunities: string[];
-  coaching_suggestions: string[];
-}
-
-function buildPrompt(call: Call): string {
-  return `Analyze this sales call transcript and return a JSON object with exactly these keys:
-overall_score, rapport, qualification, discovery, objection_handling, urgency, closing,
-script_compliance, communication (all integers 0-100), buying_intent (one of "very_high",
-"high", "medium", "low"), buying_intent_reason (string), pain_points (string array),
-goals (string array), objections (string array), sentiment (string array of tone words),
-missed_opportunities (string array), coaching_suggestions (string array).
-
-Call outcome: ${call.outcome}
-Duration: ${call.duration} seconds
-
-Transcript:
-${call.transcript ?? "(no transcript available)"}`;
-}
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(
-  _req: Request,
+  req: NextRequest,
   { params }: { params: Promise<{ callId: string }> }
 ) {
   const { callId } = await params;
+  const supabase = createServiceRoleClient();
+
+  // Fetch call from DB
+  const { data: call, error: callErr } = await supabase
+    .from("calls")
+    .select("*")
+    .eq("id", callId)
+    .single();
+
+  if (callErr || !call) {
+    return NextResponse.json({ error: "Call not found" }, { status: 404 });
+  }
+  if (!call.transcript) {
+    return NextResponse.json({ error: "No transcript available for this call" }, { status: 400 });
+  }
+
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) {
+    return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+  }
+
+  const prompt = `You are an expert sales call analyst. Analyse this sales call transcript and return a JSON object with EXACTLY this structure (no extra keys, no markdown):
+
+{
+  "overall_score": <0-100 integer>,
+  "rapport": <0-20>,
+  "qualification": <0-20>,
+  "discovery": <0-20>,
+  "objection_handling": <0-20>,
+  "urgency": <0-20>,
+  "closing": <0-20>,
+  "script_compliance": <0-20>,
+  "communication": <0-20>,
+  "buying_intent": "very_high" | "high" | "medium" | "low",
+  "buying_intent_reason": "<1-2 sentences>",
+  "pain_points": ["<pain point>", ...],
+  "goals": ["<goal>", ...],
+  "objections": ["<objection>", ...],
+  "sentiment": ["<emotion>", ...],
+  "missed_opportunities": ["<opportunity>", ...],
+  "coaching_suggestions": ["<suggestion>", ...],
+  "ai_summary": "<2-3 sentence summary>"
+}
+
+Rules:
+- overall_score = average of all 8 dimension scores (0-100 scale)
+- pain_points: list every problem the prospect mentioned
+- goals: what the prospect wants to achieve
+- objections: resistance points raised
+- sentiment: emotions detected (excited, curious, nervous, skeptical, confident, hesitant)
+- missed_opportunities: specific moments where setter could have done better
+- coaching_suggestions: actionable coaching advice for the setter
+
+TRANSCRIPT:
+Setter: ${call.setter}
+Lead: ${call.lead_name}
+
+${call.transcript}`;
 
   try {
-    const supabase = createServiceRoleClient();
-
-    const { data: call, error: callError } = await supabase
-      .from("calls")
-      .select("*")
-      .eq("id", callId)
-      .single<Call>();
-
-    if (callError || !call) {
-      return NextResponse.json<ApiResponse<never>>(
-        { success: false, error: "Call not found" },
-        { status: 404 }
-      );
-    }
-
-    if (!call.transcript) {
-      return NextResponse.json<ApiResponse<never>>(
-        { success: false, error: "Call has no transcript to analyze" },
-        { status: 400 }
-      );
-    }
-
-    const result = await askClaudeForJSON<ClaudeAnalysisShape>({
-      system: ANALYSIS_SYSTEM_PROMPT,
-      prompt: buildPrompt(call),
-      maxTokens: 1536,
+    const message = await client.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
     });
 
-    const analysis: AIAnalysis = {
-      call_id: call.id,
-      ...result,
-    };
-
-    const { error: upsertError } = await supabase
-      .from("ai_analysis")
-      .upsert(analysis, { onConflict: "call_id" });
-
-    if (upsertError) {
-      throw new Error(upsertError.message);
+    const raw = message.content[0].type === "text" ? message.content[0].text : "";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return NextResponse.json({ error: "Claude returned invalid JSON", raw }, { status: 500 });
     }
 
-    return NextResponse.json<ApiResponse<AIAnalysis>>({ success: true, data: analysis });
-  } catch (err) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
-      { status: 500 }
-    );
+    const analysis = JSON.parse(jsonMatch[0]);
+
+    // Save AI summary back to call record
+    await supabase
+      .from("calls")
+      .update({ ai_summary: analysis.ai_summary })
+      .eq("id", callId);
+
+    // Upsert analysis record
+    const { error: analysisErr } = await supabase
+      .from("ai_analysis")
+      .upsert({
+        call_id:             callId,
+        overall_score:       analysis.overall_score,
+        rapport:             analysis.rapport,
+        qualification:       analysis.qualification,
+        discovery:           analysis.discovery,
+        objection_handling:  analysis.objection_handling,
+        urgency:             analysis.urgency,
+        closing:             analysis.closing,
+        script_compliance:   analysis.script_compliance,
+        communication:       analysis.communication,
+        buying_intent:       analysis.buying_intent,
+        buying_intent_reason:analysis.buying_intent_reason,
+        pain_points:         analysis.pain_points,
+        goals:               analysis.goals,
+        objections:          analysis.objections,
+        sentiment:           analysis.sentiment,
+        missed_opportunities:analysis.missed_opportunities,
+        coaching_suggestions:analysis.coaching_suggestions,
+      }, { onConflict: "call_id" });
+
+    if (analysisErr) {
+      console.error("Analysis save error:", analysisErr);
+    }
+
+    return NextResponse.json({ ok: true, callId, analysis });
+
+  } catch (e) {
+    console.error("Claude analysis error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
