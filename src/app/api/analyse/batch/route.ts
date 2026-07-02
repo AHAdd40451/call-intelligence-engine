@@ -1,56 +1,65 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
-import type { ApiResponse, Call } from "@/types";
 
-export const dynamic = "force-dynamic";
+export async function POST(req: NextRequest) {
+  const cronSecret = req.headers.get("x-cron-secret");
+  if (cronSecret !== process.env.CRON_SECRET && process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-interface BatchQueueResult {
-  queued: number;
-  call_ids: string[];
+  const supabase = createServiceRoleClient();
+  const { limit = 10 } = await req.json().catch(() => ({}));
+
+  // Find calls with transcript but no AI analysis yet
+  const { data: calls, error } = await supabase
+    .from("calls")
+    .select("id")
+    .not("transcript", "is", null)
+    .not("transcript", "eq", "")
+    .is("ai_summary", null)
+    .limit(limit);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "http://localhost:3000";
+
+  const results: Array<{ callId: string; status: string; error?: string }> = [];
+
+  for (const call of calls ?? []) {
+    try {
+      const res = await fetch(`${baseUrl}/api/analyse/${call.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-cron-secret": process.env.CRON_SECRET ?? "",
+        },
+      });
+      const data = await res.json();
+      results.push({ callId: call.id, status: res.ok ? "ok" : "error", error: data.error });
+    } catch (e) {
+      results.push({ callId: call.id, status: "error", error: String(e) });
+    }
+    // Rate limit: 1 req/sec to stay well within Claude API limits
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  const succeeded = results.filter(r => r.status === "ok").length;
+  const failed    = results.filter(r => r.status === "error").length;
+
+  return NextResponse.json({ ok: true, queued: calls?.length ?? 0, succeeded, failed, results });
 }
 
-/**
- * Finds calls with a transcript that have not yet been analyzed and queues
- * them for analysis by calling POST /api/analyse/[callId] for each. Runs
- * requests with limited concurrency to stay within Anthropic rate limits.
- */
-export async function POST(req: Request) {
-  try {
-    const supabase = createServiceRoleClient();
-    const { limit = 25 } = await req.json().catch(() => ({ limit: 25 }));
+export async function GET() {
+  const supabase = createServiceRoleClient();
+  const { count: totalCalls }    = await supabase.from("calls").select("*", { count:"exact", head:true });
+  const { count: analysedCalls } = await supabase.from("ai_analysis").select("*", { count:"exact", head:true });
+  const { count: pending }       = await supabase.from("calls")
+    .select("*", { count:"exact", head:true })
+    .not("transcript","is",null).is("ai_summary",null);
 
-    const { data: calls, error } = await supabase
-      .from("calls")
-      .select("id, transcript, ai_analysis(call_id)")
-      .not("transcript", "is", null)
-      .is("ai_analysis.call_id", null)
-      .limit(limit)
-      .returns<Pick<Call, "id" | "transcript">[]>();
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    const callIds = (calls ?? []).map((c) => c.id);
-    const baseUrl = new URL(req.url).origin;
-    const concurrency = 3;
-
-    for (let i = 0; i < callIds.length; i += concurrency) {
-      const batch = callIds.slice(i, i + concurrency);
-      await Promise.allSettled(
-        batch.map((callId) =>
-          fetch(`${baseUrl}/api/analyse/${callId}`, { method: "POST" })
-        )
-      );
-    }
-
-    const result: BatchQueueResult = { queued: callIds.length, call_ids: callIds };
-
-    return NextResponse.json<ApiResponse<BatchQueueResult>>({ success: true, data: result });
-  } catch (err) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ totalCalls, analysedCalls, pendingAnalysis: pending });
 }
