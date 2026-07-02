@@ -6,21 +6,24 @@ import {
   LayoutDashboard,
   FileText,
   Clock,
-  GraduationCap,
-  TrendingUp,
-  Sparkles,
+  Brain,
+  Users,
+  UserCheck,
+  BarChart2,
   Settings,
-  Phone,
+  BarChart3,
+  ChevronUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { label: "Transcripts", href: "/transcripts", icon: FileText },
-  { label: "Best Times", href: "/best-times", icon: Clock },
-  { label: "Coaching", href: "/coaching", icon: GraduationCap },
-  { label: "Market Intel", href: "/market-intelligence", icon: TrendingUp },
-  { label: "Content Engine", href: "/content-engine", icon: Sparkles },
+  { label: "Best Times to Call", href: "/best-times", icon: Clock },
+  { label: "AI Call Analysis", href: "/coaching", icon: Brain },
+  { label: "Leads", href: "/leads", icon: Users },
+  { label: "Setters", href: "/setters", icon: UserCheck },
+  { label: "Reports", href: "/reports", icon: BarChart2 },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -28,17 +31,22 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden md:flex md:w-60 md:flex-col md:fixed md:inset-y-0 border-r border-[#ffffff10] bg-[#0a0a0f]">
-      <div className="flex items-center gap-2 px-5 h-16 border-b border-[#ffffff10]">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#6366f1] to-[#8b5cf6] shadow-lg shadow-[#6366f1]/20">
-          <Phone className="h-4 w-4 text-white" />
+    <aside className="flex w-[220px] flex-shrink-0 flex-col h-screen bg-[#0f1120] border-r border-[rgba(255,255,255,0.06)]">
+      <div className="px-4 py-4">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#3b82f6]/15">
+            <BarChart3 className="h-4 w-4 text-[#3b82f6]" />
+          </div>
+          <span className="text-sm font-bold text-white">CGT</span>
         </div>
-        <span className="text-sm font-semibold text-zinc-100 tracking-tight">
-          Call Intelligence
-        </span>
+        <p className="mt-1 text-[10px] tracking-wide text-[#94a3b8]">
+          CAPITAL GROWTH TRADERS
+        </p>
       </div>
 
-      <nav className="flex-1 space-y-1 px-3 py-4">
+      <div className="mx-4 border-t border-[rgba(255,255,255,0.06)]" />
+
+      <nav className="flex-1 space-y-1 px-3 py-3 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
           const isActive =
             pathname === item.href || pathname?.startsWith(`${item.href}/`);
@@ -48,25 +56,34 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors border-l-[3px]",
                 isActive
-                  ? "bg-[#6366f1]/10 text-[#a5a6f6] border border-[#6366f1]/20"
-                  : "text-zinc-400 hover:bg-[#ffffff08] hover:text-zinc-100 border border-transparent"
+                  ? "border-[#6366f1] bg-[rgba(99,102,241,0.12)] text-white pl-[9px]"
+                  : "border-transparent text-[#94a3b8] hover:bg-[#1a1f35] hover:text-white pl-[9px]"
               )}
             >
-              <Icon className="h-4 w-4 shrink-0" />
+              <Icon
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  isActive ? "text-[#6366f1]" : "text-[#94a3b8]"
+                )}
+              />
               {item.label}
             </Link>
           );
         })}
       </nav>
 
-      <div className="px-3 py-4 border-t border-[#ffffff10]">
-        <div className="rounded-lg border border-[#ffffff10] bg-[#111118] p-3">
-          <p className="text-xs font-medium text-zinc-300">AI Engine</p>
-          <p className="mt-1 text-xs text-zinc-500">
-            Powered by Claude for call scoring &amp; content generation.
-          </p>
+      <div className="px-3 py-3 border-t border-[rgba(255,255,255,0.06)]">
+        <div className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-[#1a1f35] cursor-pointer">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#334155] text-xs font-semibold text-white">
+            NE
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white truncate">Neo</p>
+            <p className="text-[11px] text-[#94a3b8] truncate">AI Chief of Staff</p>
+          </div>
+          <ChevronUp className="h-4 w-4 text-[#94a3b8]" />
         </div>
       </div>
     </aside>
