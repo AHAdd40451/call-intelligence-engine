@@ -1,105 +1,122 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
-import type { Call, SyncResult, ApiResponse } from "@/types";
 
-export const dynamic = "force-dynamic";
+const GHL_BASE = "https://services.leadconnectorhq.com";
 
-const GHL_API_URL = "https://services.leadconnectorhq.com";
-
-interface GhlCallActivity {
+interface GHLCall {
   id: string;
   contactId: string;
-  contactName: string;
-  contactPhone: string;
-  userId: string;
-  userName: string;
+  contactName?: string;
+  phone?: string;
+  userId?: string;
+  userName?: string;
   dateAdded: string;
-  duration: number;
-  callStatus: string;
+  duration?: number;
+  status?: string;
   recordingUrl?: string;
-  transcript?: string;
+  transcription?: string;
+  direction?: string;
+  type?: string;
 }
 
-interface GhlCallsResponse {
-  calls: GhlCallActivity[];
+interface GHLContact {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
 }
 
-function mapCallStatus(status: string): Call["outcome"] {
-  const normalized = status.toLowerCase();
-  if (normalized.includes("book") || normalized.includes("appointment")) return "booked";
-  if (normalized.includes("callback")) return "callback";
-  if (normalized.includes("voicemail")) return "voicemail";
-  if (normalized.includes("no-answer") || normalized.includes("missed")) return "no_answer";
-  return "not_interested";
-}
+export async function POST(req: NextRequest) {
+  const cronSecret = req.headers.get("x-cron-secret");
+  if (cronSecret !== process.env.CRON_SECRET && process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-export async function POST() {
-  const startedAt = Date.now();
+  const GHL_KEY = process.env.GHL_API_KEY;
+  if (!GHL_KEY) {
+    return NextResponse.json({ error: "GHL_API_KEY not configured" }, { status: 500 });
+  }
+
+  const supabase = createServiceRoleClient();
+  let synced = 0;
+  let errors = 0;
 
   try {
-    const apiKey = process.env.GHL_API_KEY;
-    if (!apiKey) {
-      throw new Error("GHL_API_KEY is not configured");
-    }
-
-    const supabase = createServiceRoleClient();
-
-    const res = await fetch(`${GHL_API_URL}/calls/?limit=100`, {
+    // Fetch calls from GHL
+    const callsRes = await fetch(`${GHL_BASE}/conversations/search?type=call&limit=100`, {
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Version: "2021-07-28",
+        Authorization: `Bearer ${GHL_KEY}`,
+        Version: "2021-04-15",
+        "Content-Type": "application/json",
       },
     });
 
-    if (!res.ok) {
-      throw new Error(`GoHighLevel request failed: ${res.status} ${res.statusText}`);
+    if (!callsRes.ok) {
+      const errText = await callsRes.text();
+      return NextResponse.json({
+        error: `GHL API error: ${callsRes.status}`,
+        detail: errText,
+      }, { status: 502 });
     }
 
-    const data = (await res.json()) as GhlCallsResponse;
+    const callsData = await callsRes.json();
+    const calls: GHLCall[] = callsData.conversations ?? callsData.calls ?? [];
 
-    const rows: Call[] = (data.calls ?? []).map((call) => ({
-      id: `ghl_${call.id}`,
-      lead_name: call.contactName,
-      phone: call.contactPhone,
-      setter: call.userName,
-      setter_id: call.userId,
-      date: call.dateAdded,
-      duration: call.duration,
-      outcome: mapCallStatus(call.callStatus),
-      recording_url: call.recordingUrl,
-      transcript: call.transcript,
-      source: "ghl",
-      raw_id: call.id,
-    }));
+    for (const call of calls) {
+      try {
+        // Map outcome from GHL status
+        const outcomeMap: Record<string, string> = {
+          completed: "callback",
+          answered:  "callback",
+          no_answer: "no_answer",
+          voicemail: "voicemail",
+          busy:      "no_answer",
+        };
+        const outcome = outcomeMap[call.status ?? ""] ?? "callback";
 
-    let created = 0;
-    let errors = 0;
+        const record = {
+          id:            `ghl_${call.id}`,
+          lead_name:     call.contactName ?? "Unknown",
+          phone:         call.phone ?? "",
+          setter:        call.userName ?? "Unknown",
+          setter_id:     call.userId ?? "unknown",
+          date:          call.dateAdded,
+          duration:      call.duration ?? 0,
+          outcome,
+          recording_url: call.recordingUrl ?? null,
+          transcript:    call.transcription ?? null,
+          ai_summary:    null,
+          source:        "ghl",
+          raw_id:        call.id,
+        };
 
-    if (rows.length > 0) {
-      const { error, count } = await supabase
-        .from("calls")
-        .upsert(rows, { onConflict: "raw_id,source", count: "exact" });
+        const { error } = await supabase
+          .from("calls")
+          .upsert(record, { onConflict: "raw_id,source" });
 
-      if (error) {
-        errors = rows.length;
-      } else {
-        created = count ?? rows.length;
+        if (error) { console.error("GHL upsert error:", error); errors++; }
+        else synced++;
+      } catch (e) {
+        console.error("Failed to process GHL call:", call.id, e);
+        errors++;
       }
     }
 
-    const result: SyncResult = {
-      synced: rows.length,
-      created,
-      updated: 0,
+    return NextResponse.json({
+      ok: true,
+      synced,
       errors,
-      duration_ms: Date.now() - startedAt,
-    };
+      total: calls.length,
+      source: "ghl",
+    });
 
-    return NextResponse.json<ApiResponse<SyncResult>>({ success: errors === 0, data: result });
-  } catch (err) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
-      { status: 500 }
-    );
+  } catch (e) {
+    console.error("GHL sync error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
+}
+
+export async function GET() {
+  return NextResponse.json({ status: "GHL sync endpoint ready. Send POST to trigger sync." });
 }
