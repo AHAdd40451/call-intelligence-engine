@@ -3,87 +3,86 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  FileText,
-  Clock,
-  Brain,
-  Users,
-  UserCheck,
-  BarChart2,
-  Settings,
-  BarChart3,
-  ChevronUp,
+  LayoutDashboard, FileText, Clock, Brain,
+  Users, UserCheck, BarChart2, Settings,
+  BarChart3, ChevronUp,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
-const NAV_ITEMS = [
-  { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Transcripts", href: "/transcripts", icon: FileText },
-  { label: "Best Times to Call", href: "/best-times", icon: Clock },
-  { label: "AI Call Analysis", href: "/coaching", icon: Brain },
-  { label: "Leads", href: "/leads", icon: Users },
-  { label: "Setters", href: "/setters", icon: UserCheck },
-  { label: "Reports", href: "/reports", icon: BarChart2 },
-  { label: "Settings", href: "/settings", icon: Settings },
+const NAV = [
+  { label:"Overview",           href:"/dashboard",  Icon:LayoutDashboard },
+  { label:"Transcripts",        href:"/transcripts",Icon:FileText         },
+  { label:"Best Times to Call", href:"/best-times", Icon:Clock            },
+  { label:"AI Call Analysis",   href:"/coaching",   Icon:Brain            },
+  { label:"Leads",              href:"/leads",      Icon:Users            },
+  { label:"Setters",            href:"/setters",    Icon:UserCheck        },
+  { label:"Reports",            href:"/reports",    Icon:BarChart2        },
+  { label:"Settings",           href:"/settings",   Icon:Settings         },
 ];
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const path = usePathname();
 
   return (
-    <aside className="flex w-[220px] flex-shrink-0 flex-col h-screen bg-[#0f1120] border-r border-[rgba(255,255,255,0.06)]">
-      <div className="px-4 py-4">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#3b82f6]/15">
-            <BarChart3 className="h-4 w-4 text-[#3b82f6]" />
+    <aside style={{
+      width: 220,
+      flexShrink: 0,
+      display: "flex",
+      flexDirection: "column",
+      height: "100dvh",
+      background: "#0f1120",
+      borderRight: "1px solid rgba(255,255,255,0.06)",
+      overflow: "hidden",
+    }}>
+      {/* Logo */}
+      <div style={{ padding:"16px 16px 10px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ width:32, height:32, borderRadius:8, background:"rgba(59,130,246,0.15)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <BarChart3 size={16} color="#3b82f6"/>
           </div>
-          <span className="text-sm font-bold text-white">CGT</span>
+          <span style={{ fontSize:15, fontWeight:700, color:"#f1f5f9" }}>CGT</span>
         </div>
-        <p className="mt-1 text-[10px] tracking-wide text-[#94a3b8]">
-          CAPITAL GROWTH TRADERS
-        </p>
+        <div style={{ fontSize:10, color:"#94a3b8", marginTop:4, letterSpacing:".08em" }}>CAPITAL GROWTH TRADERS</div>
       </div>
 
-      <div className="mx-4 border-t border-[rgba(255,255,255,0.06)]" />
+      <div style={{ height:1, background:"rgba(255,255,255,0.06)", margin:"0 16px" }}/>
 
-      <nav className="flex-1 space-y-1 px-3 py-3 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
-          const isActive =
-            pathname === item.href || pathname?.startsWith(`${item.href}/`);
-          const Icon = item.icon;
+      {/* Nav */}
+      <nav style={{ flex:1, overflowY:"auto", padding:"8px 10px" }}>
+        {NAV.map(({ label, href, Icon }) => {
+          const active = path === href || path?.startsWith(href + "/");
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors border-l-[3px]",
-                isActive
-                  ? "border-[#6366f1] bg-[rgba(99,102,241,0.12)] text-white pl-[9px]"
-                  : "border-transparent text-[#94a3b8] hover:bg-[#1a1f35] hover:text-white pl-[9px]"
-              )}
-            >
-              <Icon
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  isActive ? "text-[#6366f1]" : "text-[#94a3b8]"
-                )}
-              />
-              {item.label}
+            <Link key={href} href={href} style={{ textDecoration:"none" }}>
+              <div style={{
+                display:"flex", alignItems:"center", gap:10,
+                padding:"7px 10px",
+                marginBottom:2,
+                borderRadius:8,
+                borderLeft: `3px solid ${active ? "#6366f1" : "transparent"}`,
+                background: active ? "rgba(99,102,241,0.12)" : "transparent",
+                color: active ? "#f1f5f9" : "#94a3b8",
+                fontSize:13,
+                cursor:"pointer",
+                transition:"background .15s, color .15s",
+              }}>
+                <Icon size={15} color={active ? "#6366f1" : "#94a3b8"}/>
+                {label}
+              </div>
             </Link>
           );
         })}
       </nav>
 
-      <div className="px-3 py-3 border-t border-[rgba(255,255,255,0.06)]">
-        <div className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-[#1a1f35] cursor-pointer">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#334155] text-xs font-semibold text-white">
-            NE
+      <div style={{ height:1, background:"rgba(255,255,255,0.06)", margin:"0 10px" }}/>
+
+      {/* User */}
+      <div style={{ padding:"10px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:8, cursor:"pointer" }}>
+          <div style={{ width:32, height:32, borderRadius:"50%", background:"#334155", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0 }}>NE</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:"#f1f5f9" }}>Neo</div>
+            <div style={{ fontSize:11, color:"#94a3b8" }}>AI Chief of Staff</div>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white truncate">Neo</p>
-            <p className="text-[11px] text-[#94a3b8] truncate">AI Chief of Staff</p>
-          </div>
-          <ChevronUp className="h-4 w-4 text-[#94a3b8]" />
+          <ChevronUp size={14} color="#94a3b8"/>
         </div>
       </div>
     </aside>

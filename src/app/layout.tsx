@@ -8,12 +8,26 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html lang="en" className="h-screen overflow-hidden">
-      <body className="h-screen overflow-hidden flex">{children}</body>
+    <html lang="en">
+      <body
+        style={{
+          margin: 0,
+          padding: 0,
+          background: "#0d0f1a",
+          color: "#f1f5f9",
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          height: "100dvh",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {children}
+      </body>
     </html>
   );
 }
